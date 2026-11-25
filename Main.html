@@ -162,26 +162,25 @@
                         ⚽ PIXEL KEEPER '94
                     </div>
                     <p class="text-[7px] sm:text-[9px] text-slate-300 leading-relaxed">
-                        STOP THE PENALTIES! LOAD YOUR LOCAL MODEL FILES OR USE KEYS/BUTTONS TO DIVE.
+                        STOP THE PENALTIES! LEAN LEFT, CENTER, OR RIGHT WITH YOUR WEBCAM POSE MODEL OR USE KEYS/BUTTONS.
                     </p>
 
-                    <!-- Local Model File Loader (Primary Pose Option) -->
-                    <label class="arcade-btn pulse-cta w-full bg-emerald-500 text-black font-bold text-[8px] sm:text-[9px] py-2.5 px-2 rounded cursor-pointer text-center block">
-                        📂 LOAD LOCAL MODEL (3 FILES)
-                        <input id="localModelInput" type="file" multiple accept=".json,.bin" class="hidden" />
-                    </label>
-
-                    <div class="flex flex-col sm:flex-row gap-2 w-full">
-                        <button id="btnStartPose" class="arcade-btn flex-1 bg-sky-600 text-white font-bold text-[7px] sm:text-[8px] py-2 px-2 rounded">
-                            📷 CLOUD POSE URL
+                    <div class="flex flex-col sm:flex-row gap-2 w-full mt-1">
+                        <button id="btnStartPose" class="arcade-btn pulse-cta flex-1 bg-emerald-500 text-black font-bold text-[8px] sm:text-[9px] py-2.5 px-2 rounded">
+                            📷 PLAY WITH POSE CAM
                         </button>
-                        <button id="btnStartKeys" class="arcade-btn flex-1 bg-amber-400 text-black font-bold text-[7px] sm:text-[8px] py-2 px-2 rounded">
+                        <button id="btnStartKeys" class="arcade-btn flex-1 bg-amber-400 text-black font-bold text-[8px] sm:text-[9px] py-2.5 px-2 rounded">
                             🎮 PLAY (KEYS/TOUCH)
                         </button>
                     </div>
 
+                    <label class="arcade-btn w-full bg-slate-800 hover:bg-slate-700 text-sky-300 text-[7px] sm:text-[8px] py-2 px-2 rounded cursor-pointer text-center block">
+                        📂 OR SELECT LOCAL FILES (3 FILES)
+                        <input id="localModelInput" type="file" multiple accept=".json,.bin" class="hidden" />
+                    </label>
+
                     <div class="text-[6px] sm:text-[7px] text-slate-400 leading-normal">
-                        SELECT model.json + metadata.json + weights.bin TOGETHER
+                        AUTO-LOADS ./model.json FROM REPO ON GITHUB PAGES
                     </div>
                 </div>
             </div>
@@ -343,7 +342,7 @@
 
         // ==========================================
         // 2. TEACHABLE MACHINE POSE CONTROLLER
-        // Supports Local File Upload (3 files) & Cloud URL
+        // Auto-loads ./model.json & ./metadata.json from repo root
         // ==========================================
         class TeachableMachinePoseController {
             constructor(modelBaseUrl, onPoseAction, onStatus) {
@@ -480,7 +479,7 @@
 
                     if (!this.model) {
                         if (this.onStatus) {
-                            this.onStatus('LOADING CLOUD POSE MODEL...', false);
+                            this.onStatus('LOADING POSE MODEL...', false);
                         }
                         const modelURL = this.modelBaseUrl + 'model.json';
                         const metadataURL = this.modelBaseUrl + 'metadata.json';
@@ -539,8 +538,11 @@
                 const msg = ((err && err.message) || '').toLowerCase();
                 const inIframe = window.self !== window.top;
 
+                if (window.location.protocol === 'file:') {
+                    return 'OPEN VIA GITHUB PAGES OR USE LOCAL FILE PICKER';
+                }
                 if (msg.includes('404') || msg.includes('failed to fetch')) {
-                    return 'CLOUD MODEL 404 - USE LOCAL FILES OR SIMULATE';
+                    return 'MODEL NOT FOUND - USE LOCAL FILE PICKER OR SIMULATE';
                 }
                 if (name === 'IframePolicyBlocked' || msg.includes('permissions policy')) {
                     return 'IFRAME BLOCKED CAM - OPEN NEW TAB OR SIMULATE';
@@ -556,7 +558,7 @@
                 if (name === 'NotReadableError' || name === 'TrackStartError') {
                     return 'WEBCAM BUSY IN ANOTHER APP';
                 }
-                return 'MODEL/CAM UNAVAILABLE - USE LOCAL FILES OR SIMULATE';
+                return 'CAM UNAVAILABLE - USE KEYS OR SIMULATE';
             }
 
             stop() {
@@ -735,9 +737,9 @@
                 this.particles = [];
                 this.crowdPhase = 0;
 
-                // Teachable Machine Controller
+                // Loads ./model.json & ./metadata.json directly from same folder
                 this.poseCtrl = new TeachableMachinePoseController(
-                    'https://teachablemachine.withgoogle.com/models/MaEtmU1EA/',
+                    './',
                     (dir) => this.setKeeperLane(dir, true),
                     (msg, showSim) => this.showToast(msg, showSim)
                 );
@@ -749,7 +751,6 @@
             }
 
             bindEvents() {
-                // Local Model Files Picker (3 files: model.json, metadata.json, weights.bin)
                 document.getElementById('localModelInput').addEventListener('change', async (e) => {
                     const loaded = await this.poseCtrl.loadFromLocalFiles(e.target.files);
                     if (loaded) {
@@ -761,7 +762,6 @@
                     e.target.value = '';
                 });
 
-                // Start Buttons
                 document.getElementById('btnStartKeys').addEventListener('click', () => {
                     this.sound.ensureContext();
                     this.sound.startBgm();
@@ -780,7 +780,6 @@
                     this.startGame();
                 });
 
-                // Header Toggles
                 document.getElementById('btnWebcam').addEventListener('click', () => this.toggleWebcam());
                 document.getElementById('btnSimCam').addEventListener('click', () => {
                     this.poseCtrl.startSimulation();
@@ -802,7 +801,6 @@
                     if (this.state !== 'TITLE') this.startGame();
                 });
 
-                // Tactile Dive Buttons
                 const bindCtrl = (id, dir) => {
                     const el = document.getElementById(id);
                     const trigger = (e) => {
@@ -816,7 +814,6 @@
                 bindCtrl('ctrlCenter', 'center');
                 bindCtrl('ctrlRight', 'right');
 
-                // Keyboard Controls
                 window.addEventListener('keydown', (e) => {
                     const key = e.key.toLowerCase();
                     if (key === 'arrowleft' || key === 'a') {
