@@ -162,20 +162,26 @@
                         ⚽ PIXEL KEEPER '94
                     </div>
                     <p class="text-[7px] sm:text-[9px] text-slate-300 leading-relaxed">
-                        STOP THE PENALTIES! LEAN LEFT, CENTER, OR RIGHT WITH YOUR WEBCAM POSE MODEL OR USE KEYS/BUTTONS.
+                        STOP THE PENALTIES! LOAD YOUR LOCAL MODEL FILES OR USE KEYS/BUTTONS TO DIVE.
                     </p>
 
-                    <div class="flex flex-col sm:flex-row gap-2 w-full mt-1">
-                        <button id="btnStartPose" class="arcade-btn pulse-cta flex-1 bg-emerald-500 text-black font-bold text-[8px] sm:text-[9px] py-2.5 px-2 rounded">
-                            📷 PLAY WITH POSE CAM
+                    <!-- Local Model File Loader (Primary Pose Option) -->
+                    <label class="arcade-btn pulse-cta w-full bg-emerald-500 text-black font-bold text-[8px] sm:text-[9px] py-2.5 px-2 rounded cursor-pointer text-center block">
+                        📂 LOAD LOCAL MODEL (3 FILES)
+                        <input id="localModelInput" type="file" multiple accept=".json,.bin" class="hidden" />
+                    </label>
+
+                    <div class="flex flex-col sm:flex-row gap-2 w-full">
+                        <button id="btnStartPose" class="arcade-btn flex-1 bg-sky-600 text-white font-bold text-[7px] sm:text-[8px] py-2 px-2 rounded">
+                            📷 CLOUD POSE URL
                         </button>
-                        <button id="btnStartKeys" class="arcade-btn flex-1 bg-amber-400 text-black font-bold text-[8px] sm:text-[9px] py-2.5 px-2 rounded">
+                        <button id="btnStartKeys" class="arcade-btn flex-1 bg-amber-400 text-black font-bold text-[7px] sm:text-[8px] py-2 px-2 rounded">
                             🎮 PLAY (KEYS/TOUCH)
                         </button>
                     </div>
 
-                    <div class="text-[6px] sm:text-[7px] text-slate-400">
-                        MODEL: MaEtmU1EA • AUTO-LOADED • NO FILES NEEDED
+                    <div class="text-[6px] sm:text-[7px] text-slate-400 leading-normal">
+                        SELECT model.json + metadata.json + weights.bin TOGETHER
                     </div>
                 </div>
             </div>
@@ -337,6 +343,7 @@
 
         // ==========================================
         // 2. TEACHABLE MACHINE POSE CONTROLLER
+        // Supports Local File Upload (3 files) & Cloud URL
         // ==========================================
         class TeachableMachinePoseController {
             constructor(modelBaseUrl, onPoseAction, onStatus) {
@@ -427,6 +434,38 @@
                 });
             }
 
+            async loadFromLocalFiles(fileList) {
+                try {
+                    if (typeof tmPose === 'undefined') {
+                        throw new Error('Pose SDK still loading.');
+                    }
+                    const files = Array.from(fileList);
+                    const modelFile = files.find(f => f.name.toLowerCase() === 'model.json');
+                    const weightsFile = files.find(f => f.name.toLowerCase().endsWith('.bin'));
+                    const metadataFile = files.find(f => f.name.toLowerCase() === 'metadata.json');
+
+                    if (!modelFile || !weightsFile || !metadataFile) {
+                        if (this.onStatus) {
+                            this.onStatus('SELECT ALL 3: model.json, metadata.json, weights.bin', false);
+                        }
+                        return false;
+                    }
+
+                    if (this.onStatus) {
+                        this.onStatus('LOADING LOCAL MODEL FILES...', false);
+                    }
+
+                    this.model = await tmPose.loadFromFiles(modelFile, weightsFile, metadataFile);
+                    this.maxPredictions = this.model.getTotalClasses();
+                    return true;
+                } catch (err) {
+                    if (this.onStatus) {
+                        this.onStatus('FAILED TO PARSE LOCAL MODEL FILES', true);
+                    }
+                    return false;
+                }
+            }
+
             async start() {
                 try {
                     if (typeof tmPose === 'undefined') {
@@ -439,11 +478,10 @@
                         }
                     }
 
-                    if (this.onStatus) {
-                        this.onStatus('LOADING POSE MODEL MaEtmU1EA...', false);
-                    }
-
                     if (!this.model) {
+                        if (this.onStatus) {
+                            this.onStatus('LOADING CLOUD POSE MODEL...', false);
+                        }
                         const modelURL = this.modelBaseUrl + 'model.json';
                         const metadataURL = this.modelBaseUrl + 'metadata.json';
                         this.model = await tmPose.load(modelURL, metadataURL);
@@ -501,6 +539,9 @@
                 const msg = ((err && err.message) || '').toLowerCase();
                 const inIframe = window.self !== window.top;
 
+                if (msg.includes('404') || msg.includes('failed to fetch')) {
+                    return 'CLOUD MODEL 404 - USE LOCAL FILES OR SIMULATE';
+                }
                 if (name === 'IframePolicyBlocked' || msg.includes('permissions policy')) {
                     return 'IFRAME BLOCKED CAM - OPEN NEW TAB OR SIMULATE';
                 }
@@ -515,7 +556,7 @@
                 if (name === 'NotReadableError' || name === 'TrackStartError') {
                     return 'WEBCAM BUSY IN ANOTHER APP';
                 }
-                return 'CAM UNAVAILABLE - USE KEYS OR SIMULATE';
+                return 'MODEL/CAM UNAVAILABLE - USE LOCAL FILES OR SIMULATE';
             }
 
             stop() {
@@ -654,7 +695,6 @@
                 this.ctx = this.canvas.getContext('2d');
                 this.sound = new RetroSoundEngine();
 
-                // Game Modes: 'ARCADE' (3 gloves) or 'SHOOTOUT' (5 rounds sudden death)
                 this.mode = 'ARCADE';
                 this.state = 'TITLE'; // TITLE | READY | RUNUP | FLIGHT | RESULT | GAMEOVER
 
@@ -668,7 +708,7 @@
                 this.bestScore = parseInt(localStorage.getItem('pk94_best') || '0', 10);
 
                 // Keeper State
-                this.keeperLane = 'center'; // 'left' | 'center' | 'right'
+                this.keeperLane = 'center';
                 this.keeperX = 160;
                 this.keeperY = 104;
                 this.keeperDiveTilt = 0;
@@ -677,13 +717,14 @@
                 this.phaseTimer = 0;
                 this.flightDuration = 0.72;
                 this.targetLane = 'center';
-                this.telegraphHint = null;
                 this.ballStart = { x: 160, y: 176 };
                 this.ballEnd = { x: 160, y: 98 };
                 this.ballPos = { x: 160, y: 176, z: 0 };
                 this.ballSpin = 0;
                 this.strikerX = 148;
                 this.strikerY = 186;
+                this.reboundVx = 0;
+                this.reboundVy = 0;
 
                 // Visual FX
                 this.shakeTimer = 0;
@@ -708,23 +749,35 @@
             }
 
             bindEvents() {
+                // Local Model Files Picker (3 files: model.json, metadata.json, weights.bin)
+                document.getElementById('localModelInput').addEventListener('change', async (e) => {
+                    const loaded = await this.poseCtrl.loadFromLocalFiles(e.target.files);
+                    if (loaded) {
+                        this.sound.ensureContext();
+                        this.sound.startBgm();
+                        await this.toggleWebcam(true);
+                        this.startGame();
+                    }
+                    e.target.value = '';
+                });
+
                 // Start Buttons
                 document.getElementById('btnStartKeys').addEventListener('click', () => {
                     this.sound.ensureContext();
                     this.sound.startBgm();
-                    this.startGame(false);
+                    this.startGame();
                 });
 
                 document.getElementById('btnStartPose').addEventListener('click', async () => {
                     this.sound.ensureContext();
                     this.sound.startBgm();
                     await this.toggleWebcam(true);
-                    this.startGame(false);
+                    this.startGame();
                 });
 
                 document.getElementById('btnPlayAgain').addEventListener('click', () => {
                     this.sound.ensureContext();
-                    this.startGame(false);
+                    this.startGame();
                 });
 
                 // Header Toggles
@@ -746,7 +799,7 @@
                 document.getElementById('btnMode').addEventListener('click', () => {
                     this.mode = this.mode === 'ARCADE' ? 'CUP 5' : 'ARCADE';
                     document.getElementById('btnMode').textContent = `MODE: ${this.mode}`;
-                    if (this.state !== 'TITLE') this.startGame(false);
+                    if (this.state !== 'TITLE') this.startGame();
                 });
 
                 // Tactile Dive Buttons
@@ -774,7 +827,7 @@
                         this.setKeeperLane('right', false);
                     } else if (key === 'enter' && (this.state === 'TITLE' || this.state === 'GAMEOVER')) {
                         this.sound.ensureContext();
-                        this.startGame(false);
+                        this.startGame();
                     }
                 });
             }
@@ -812,7 +865,7 @@
 
                 clearTimeout(this.toastTimeout);
                 if (!showSimBtn) {
-                    this.toastTimeout = setTimeout(() => this.hideToast(), 3200);
+                    this.toastTimeout = setTimeout(() => this.hideToast(), 3500);
                 }
             }
 
@@ -826,7 +879,6 @@
                 }
                 this.keeperLane = dir;
 
-                // Highlight corresponding tactile button
                 document.getElementById('ctrlLeft').classList.toggle('active-press', dir === 'left');
                 document.getElementById('ctrlCenter').classList.toggle('active-press', dir === 'center');
                 document.getElementById('ctrlRight').classList.toggle('active-press', dir === 'right');
@@ -860,13 +912,11 @@
                 this.bannerText = `PENALTY #${this.shotsTaken + 1}`;
                 this.bannerColor = '#facc15';
 
-                // Reset ball & striker
                 this.ballStart = { x: 160, y: 174 };
                 this.ballPos = { x: 160, y: 174, z: 0 };
                 this.strikerX = 146;
                 this.strikerY = 188;
 
-                // Pick random target corner
                 const lanes = ['left', 'center', 'right'];
                 this.targetLane = lanes[Math.floor(Math.random() * lanes.length)];
                 const targetXMap = { left: 104, center: 160, right: 216 };
@@ -876,7 +926,6 @@
                     y: targetYMap[this.targetLane] + (Math.random() * 6 - 3)
                 };
 
-                // Gradually speed up shots as streak climbs
                 const speedScale = Math.max(0.46, 0.78 - this.saves * 0.025);
                 this.flightDuration = speedScale;
                 this.sound.playWhistle();
@@ -887,7 +936,6 @@
                 if (this.shakeTimer > 0) this.shakeTimer = Math.max(0, this.shakeTimer - dt);
                 if (this.flashAlpha > 0) this.flashAlpha = Math.max(0, this.flashAlpha - dt * 2.2);
 
-                // Smooth keeper lateral dive interpolation
                 const targetKeeperX = this.keeperLane === 'left' ? 106 : this.keeperLane === 'right' ? 214 : 160;
                 const targetKeeperY = this.keeperLane === 'center' ? 102 : 107;
                 const targetTilt = this.keeperLane === 'left' ? -0.55 : this.keeperLane === 'right' ? 0.55 : 0;
@@ -896,7 +944,6 @@
                 this.keeperY += (targetKeeperY - this.keeperY) * Math.min(1, dt * 15);
                 this.keeperDiveTilt += (targetTilt - this.keeperDiveTilt) * Math.min(1, dt * 14);
 
-                // Update particles
                 for (let i = this.particles.length - 1; i >= 0; i--) {
                     const p = this.particles[i];
                     p.x += p.vx * dt;
@@ -917,7 +964,6 @@
                         this.bannerText = '';
                     }
                 } else if (this.state === 'RUNUP') {
-                    // Striker runs toward penalty spot
                     const progress = 1 - Math.max(0, this.phaseTimer / 0.55);
                     this.strikerX = 146 + progress * 10;
                     this.strikerY = 188 - progress * 12;
@@ -930,18 +976,16 @@
                     }
                 } else if (this.state === 'FLIGHT') {
                     const t = 1 - Math.max(0, this.phaseTimer / this.flightDuration);
-                    // Parabolic arc + slight curve
                     const curve = (this.targetLane === 'left' ? -12 : this.targetLane === 'right' ? 12 : 0) * Math.sin(t * Math.PI);
                     this.ballPos.x = this.ballStart.x + (this.ballEnd.x - this.ballStart.x) * t + curve;
                     this.ballPos.y = this.ballStart.y + (this.ballEnd.y - this.ballStart.y) * t - Math.sin(t * Math.PI) * 18;
-                    this.ballPos.z = t; // 0 (near camera) -> 1 (at goal line)
+                    this.ballPos.z = t;
                     this.ballSpin += dt * 18;
 
                     if (this.phaseTimer <= 0) {
                         this.resolveShot();
                     }
                 } else if (this.state === 'RESULT') {
-                    // Post-save rebound physics
                     this.ballPos.x += this.reboundVx * dt;
                     this.ballPos.y += this.reboundVy * dt;
                     this.ballPos.z = Math.max(0.2, this.ballPos.z - dt * 0.5);
@@ -977,7 +1021,6 @@
                     this.sound.playSave();
                     this.spawnParticles(this.ballPos.x, this.ballPos.y, '#facc15', 18);
 
-                    // Rebound out of box
                     this.reboundVx = (this.keeperLane === 'left' ? -65 : this.keeperLane === 'right' ? 65 : (Math.random() > 0.5 ? 45 : -45));
                     this.reboundVy = 48;
                 } else {
@@ -993,7 +1036,6 @@
                     this.sound.playGoalScored();
                     this.spawnParticles(this.ballPos.x, this.ballPos.y, '#fb7185', 14);
 
-                    // Ball settles inside net
                     this.reboundVx = 0;
                     this.reboundVy = 12;
                 }
@@ -1088,7 +1130,6 @@
                     }
                 }
 
-                // Floodlight Towers
                 this.drawFloodlight(28, 12);
                 this.drawFloodlight(292, 12);
 
@@ -1107,12 +1148,11 @@
                     ctx.fillRect(0, 72 + i * 22, 320, 22);
                 }
 
-                // Pitch Markings (Penalty Box & Spot)
+                // Pitch Markings
                 ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
                 ctx.lineWidth = 2;
                 ctx.strokeRect(48, 112, 224, 78);
                 ctx.strokeRect(86, 112, 148, 34);
-                // Penalty Spot
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(158, 175, 4, 3);
 
@@ -1141,7 +1181,6 @@
                     ctx.fillText(this.bannerText, 160, 52);
                 }
 
-                // Screen Flash on Save/Goal
                 if (this.flashAlpha > 0 && this.flashColor) {
                     ctx.fillStyle = this.flashColor;
                     ctx.globalAlpha = this.flashAlpha;
@@ -1166,7 +1205,6 @@
                 const ctx = this.ctx;
                 const gx = 84, gy = 74, gw = 152, gh = 38;
 
-                // Net mesh lines
                 ctx.strokeStyle = 'rgba(226, 232, 240, 0.26)';
                 ctx.lineWidth = 1;
                 for (let x = gx + 6; x < gx + gw; x += 6) {
@@ -1182,11 +1220,10 @@
                     ctx.stroke();
                 }
 
-                // White Goalposts & Crossbar
                 ctx.fillStyle = '#f8fafc';
-                ctx.fillRect(gx - 3, gy - 3, gw + 6, 4); // Crossbar
-                ctx.fillRect(gx - 3, gy, 4, gh);         // Left Post
-                ctx.fillRect(gx + gw - 1, gy, 4, gh);    // Right Post
+                ctx.fillRect(gx - 3, gy - 3, gw + 6, 4);
+                ctx.fillRect(gx - 3, gy, 4, gh);
+                ctx.fillRect(gx + gw - 1, gy, 4, gh);
             }
 
             drawGoalkeeper() {
@@ -1195,22 +1232,18 @@
                 ctx.translate(Math.round(this.keeperX), Math.round(this.keeperY));
                 ctx.rotate(this.keeperDiveTilt);
 
-                // Shadow
                 ctx.fillStyle = 'rgba(0,0,0,0.35)';
                 ctx.fillRect(-10, 8, 20, 4);
 
-                // Legs & Shorts
                 ctx.fillStyle = '#0f172a';
                 ctx.fillRect(-6, 1, 5, 7);
                 ctx.fillRect(1, 1, 5, 7);
 
-                // Neon Keeper Jersey
                 ctx.fillStyle = '#facc15';
                 ctx.fillRect(-8, -10, 16, 12);
                 ctx.fillStyle = '#000000';
                 ctx.fillRect(-2, -8, 4, 6);
 
-                // Outstretched Arms & Oversized Keeper Gloves
                 const armReach = this.keeperLane === 'center' ? 11 : 15;
                 ctx.fillStyle = '#facc15';
                 ctx.fillRect(-armReach, -9, armReach * 2, 4);
@@ -1218,7 +1251,6 @@
                 ctx.fillRect(-armReach - 3, -11, 5, 7);
                 ctx.fillRect(armReach - 2, -11, 5, 7);
 
-                // Head
                 ctx.fillStyle = '#fed7aa';
                 ctx.fillRect(-4, -17, 8, 7);
                 ctx.fillStyle = '#1e293b';
@@ -1229,24 +1261,20 @@
 
             drawBall() {
                 const ctx = this.ctx;
-                // Scale ball down as it travels away from camera toward goal
                 const radius = Math.max(3.2, 7.5 - this.ballPos.z * 4.0);
                 const bx = Math.round(this.ballPos.x);
                 const by = Math.round(this.ballPos.y);
 
-                // Ground shadow
                 ctx.fillStyle = 'rgba(0,0,0,0.35)';
                 ctx.beginPath();
                 ctx.ellipse(bx, by + radius + 2, radius, radius * 0.45, 0, 0, Math.PI * 2);
                 ctx.fill();
 
-                // Soccer ball base
                 ctx.fillStyle = '#ffffff';
                 ctx.beginPath();
                 ctx.arc(bx, by, radius, 0, Math.PI * 2);
                 ctx.fill();
 
-                // Spinning pentagon spot
                 ctx.fillStyle = '#0f172a';
                 const px = bx + Math.cos(this.ballSpin) * (radius * 0.42);
                 const py = by + Math.sin(this.ballSpin) * (radius * 0.42);
@@ -1258,11 +1286,9 @@
                 const sx = Math.round(this.strikerX);
                 const sy = Math.round(this.strikerY);
 
-                // Shadow
                 ctx.fillStyle = 'rgba(0,0,0,0.4)';
                 ctx.fillRect(sx - 8, sy + 8, 16, 4);
 
-                // Red Striker Kit (back view)
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(sx - 6, sy, 5, 8);
                 ctx.fillRect(sx + 1, sy, 5, 8);
@@ -1270,12 +1296,10 @@
                 ctx.fillStyle = '#ef4444';
                 ctx.fillRect(sx - 8, sy - 12, 16, 13);
 
-                // Number 10 on back
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(sx - 3, sy - 9, 2, 6);
                 ctx.fillRect(sx + 1, sy - 9, 3, 6);
 
-                // Head
                 ctx.fillStyle = '#1e293b';
                 ctx.fillRect(sx - 4, sy - 19, 8, 7);
             }
