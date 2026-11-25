@@ -1,0 +1,1490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PIXEL KEEPER '94 - Teachable Machine Pose Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- TensorFlow.js & Teachable Machine Pose Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --pixel-font: 'Press Start 2P', 'Courier New', monospace;
+        }
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #090b10;
+            color: #f8fafc;
+            font-family: var(--pixel-font);
+            overflow-x: hidden;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        /* Crisp 16-bit pixel scaling */
+        #gameCanvas, #webcamOverlay {
+            image-rendering: -moz-crisp-edges;
+            image-rendering: -webkit-crisp-edges;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+        #gameCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        /* Subtle CRT scanline overlay */
+        .crt-scanlines {
+            background: linear-gradient(
+                rgba(18, 16, 16, 0) 50%,
+                rgba(0, 0, 0, 0.22) 50%
+            );
+            background-size: 100% 4px;
+            pointer-events: none;
+            position: absolute;
+            inset: 0;
+            z-index: 10;
+        }
+        /* Retro arcade button styling */
+        .arcade-btn {
+            font-family: var(--pixel-font);
+            border: 3px solid #000;
+            box-shadow: inset -3px -3px 0px rgba(0, 0, 0, 0.4), inset 3px 3px 0px rgba(255, 255, 255, 0.28), 0 4px 0 #000;
+            transition: transform 0.06s ease, box-shadow 0.06s ease, filter 0.1s ease;
+            cursor: pointer;
+        }
+        .arcade-btn:active, .arcade-btn.active-press {
+            transform: translateY(3px);
+            box-shadow: inset -2px -2px 0px rgba(0, 0, 0, 0.4), inset 2px 2px 0px rgba(255, 255, 255, 0.2), 0 1px 0 #000;
+        }
+        .arcade-btn:hover {
+            filter: brightness(1.08);
+        }
+        .active-toggle {
+            background-color: #10b981 !important;
+            color: #052e16 !important;
+            border-color: #ecfdf5 !important;
+        }
+        @keyframes pulseGlow {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.03); }
+        }
+        .pulse-cta {
+            animation: pulseGlow 1.6s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="p-2 sm:p-4">
+
+    <!-- Main Arcade Cabinet Container -->
+    <div class="w-full max-w-4xl flex flex-col gap-2 sm:gap-3">
+
+        <!-- Top Scoreboard & Mode Bar -->
+        <header class="bg-[#131722] border-4 border-[#2b3348] rounded-lg px-2.5 py-2 sm:px-4 sm:py-2.5 shadow-2xl flex flex-wrap items-center justify-between gap-2">
+            <!-- Brand & Mode Switcher -->
+            <div class="flex items-center gap-2 sm:gap-3">
+                <div class="bg-amber-400 text-black px-2 py-1 rounded text-[9px] sm:text-xs font-bold tracking-tight border-2 border-black">
+                    KEEPER '94
+                </div>
+                <button id="btnMode" class="arcade-btn bg-indigo-600 text-white text-[8px] sm:text-[10px] px-2 py-1.5 rounded">
+                    MODE: ARCADE
+                </button>
+            </div>
+
+            <!-- Live Score Telemetry -->
+            <div class="flex items-center gap-3 sm:gap-5 text-[8px] sm:text-[10px]">
+                <div class="flex flex-col items-center">
+                    <span class="text-slate-400 text-[7px]">SCORE</span>
+                    <span id="uiScore" class="text-amber-300 mt-0.5">0000</span>
+                </div>
+                <div class="flex flex-col items-center">
+                    <span class="text-slate-400 text-[7px]">STREAK</span>
+                    <span id="uiStreak" class="text-emerald-400 mt-0.5">0x</span>
+                </div>
+                <div class="flex flex-col items-center">
+                    <span id="uiLivesLabel" class="text-slate-400 text-[7px]">GLOVES</span>
+                    <span id="uiLives" class="text-rose-400 mt-0.5">🧤🧤🧤</span>
+                </div>
+                <div class="hidden sm:flex flex-col items-center">
+                    <span class="text-slate-400 text-[7px]">BEST</span>
+                    <span id="uiBest" class="text-sky-300 mt-0.5">0000</span>
+                </div>
+            </div>
+
+            <!-- Hardware Toggles: Teachable Machine Cam & Synth Audio -->
+            <div class="flex items-center gap-1.5 sm:gap-2">
+                <button id="btnWebcam" class="arcade-btn bg-emerald-600 text-white text-[8px] sm:text-[9px] px-2 py-1.5 rounded flex items-center gap-1" title="Activate Teachable Machine Pose Camera">
+                    <span>📷 POSE: OFF</span>
+                </button>
+                <button id="btnAudio" class="arcade-btn bg-slate-700 text-amber-300 text-[8px] sm:text-[9px] px-2 py-1.5 rounded" title="Toggle Chiptune Audio">
+                    🔊 SFX
+                </button>
+            </div>
+        </header>
+
+        <!-- Main 16:10 Retro Screen Viewport -->
+        <div class="relative w-full aspect-[16/10] bg-black border-4 border-[#2b3348] rounded-lg overflow-hidden shadow-[0_0_40px_rgba(0,0,0,0.85)]">
+            <canvas id="gameCanvas" width="320" height="200"></canvas>
+            <div class="crt-scanlines"></div>
+
+            <!-- Teachable Machine Live Pose Picture-in-Picture HUD -->
+            <div id="webcamPip" class="hidden absolute top-2 right-2 z-20 bg-[#0b0d14]/95 border-2 border-amber-400 rounded-md p-1.5 w-36 sm:w-48 shadow-2xl flex flex-col gap-1.5">
+                <div class="relative w-full aspect-square bg-black overflow-hidden rounded-sm border border-slate-700">
+                    <canvas id="webcamOverlay" width="200" height="200" class="w-full h-full block"></canvas>
+                    <div id="tmBadge" class="absolute top-1 left-1 bg-black/80 text-amber-300 text-[6px] sm:text-[7px] px-1 py-0.5 rounded border border-amber-500/50">
+                        TM POSE
+                    </div>
+                </div>
+
+                <!-- Detected Action & Confidence Threshold -->
+                <div class="flex items-center justify-between text-[7px] sm:text-[8px] px-0.5">
+                    <span id="poseStatusText" class="text-emerald-400 font-bold">CENTER</span>
+                    <div class="flex items-center gap-1 text-slate-300">
+                        <span>CONF:</span>
+                        <button id="btnConfDown" class="bg-slate-800 hover:bg-slate-700 px-1 rounded border border-slate-600 text-white">-</button>
+                        <span id="uiConfVal" class="text-amber-300">65%</span>
+                        <button id="btnConfUp" class="bg-slate-800 hover:bg-slate-700 px-1 rounded border border-slate-600 text-white">+</button>
+                    </div>
+                </div>
+
+                <!-- Dynamic Probability Bars for Teachable Machine Classes -->
+                <div id="tmProbContainer" class="flex flex-col gap-1 pt-1 border-t border-slate-800 text-[6px] sm:text-[7px]">
+                    <!-- Populated dynamically from model.getTotalClasses() -->
+                </div>
+            </div>
+
+            <!-- Start Screen Overlay -->
+            <div id="startOverlay" class="absolute inset-0 z-20 bg-slate-950/80 backdrop-blur-[1px] flex flex-col items-center justify-center p-3 text-center">
+                <div class="bg-[#111625]/95 border-4 border-amber-400 rounded-lg p-3 sm:p-5 max-w-md w-full shadow-2xl flex flex-col items-center gap-2.5 sm:gap-3.5">
+                    <div class="text-amber-300 text-xs sm:text-base tracking-wider drop-shadow-[0_2px_0_#000]">
+                        ⚽ PIXEL KEEPER '94
+                    </div>
+                    <p class="text-[7px] sm:text-[9px] text-slate-300 leading-relaxed">
+                        STOP THE PENALTIES! LEAN LEFT, CENTER, OR RIGHT WITH YOUR WEBCAM POSE MODEL OR USE KEYS/BUTTONS.
+                    </p>
+
+                    <div class="flex flex-col sm:flex-row gap-2 w-full mt-1">
+                        <button id="btnStartPose" class="arcade-btn pulse-cta flex-1 bg-emerald-500 text-black font-bold text-[8px] sm:text-[9px] py-2.5 px-2 rounded">
+                            📷 PLAY WITH POSE CAM
+                        </button>
+                        <button id="btnStartKeys" class="arcade-btn flex-1 bg-amber-400 text-black font-bold text-[8px] sm:text-[9px] py-2.5 px-2 rounded">
+                            🎮 PLAY (KEYS/TOUCH)
+                        </button>
+                    </div>
+
+                    <div class="text-[6px] sm:text-[7px] text-slate-400">
+                        MODEL: MaEtmU1EA • AUTO-LOADED • NO FILES NEEDED
+                    </div>
+                </div>
+            </div>
+
+            <!-- Game Over / Cup Final Summary Overlay -->
+            <div id="gameOverOverlay" class="hidden absolute inset-0 z-20 bg-slate-950/85 flex flex-col items-center justify-center p-3 text-center">
+                <div class="bg-[#111625] border-4 border-rose-500 rounded-lg p-4 sm:p-6 max-w-sm w-full shadow-2xl flex flex-col items-center gap-3">
+                    <div id="goTitle" class="text-rose-400 text-sm sm:text-lg">FULL TIME!</div>
+                    <div id="goSubtitle" class="text-[8px] sm:text-[10px] text-amber-300">GREAT KEEPING!</div>
+
+                    <div class="w-full bg-black/60 border-2 border-slate-700 rounded p-2.5 flex flex-col gap-1.5 text-[8px] sm:text-[10px]">
+                        <div class="flex justify-between">
+                            <span class="text-slate-400">FINAL SCORE:</span>
+                            <span id="goScore" class="text-white">0</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-slate-400">SAVES MADE:</span>
+                            <span id="goSaves" class="text-emerald-400">0</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-slate-400">BEST STREAK:</span>
+                            <span id="goStreak" class="text-amber-300">0x</span>
+                        </div>
+                    </div>
+
+                    <button id="btnPlayAgain" class="arcade-btn w-full bg-emerald-500 text-black font-bold text-[9px] sm:text-[11px] py-2.5 px-4 rounded mt-1">
+                        ↻ KICK OFF AGAIN
+                    </button>
+                </div>
+            </div>
+
+            <!-- Status / Diagnostic Banner with Simulate Pose Option -->
+            <div id="toastBanner" class="hidden absolute top-2 left-1/2 -translate-x-1/2 z-30 bg-slate-950/95 border-2 border-amber-400 text-amber-300 text-[7px] sm:text-[9px] px-2.5 py-1.5 rounded shadow-xl text-center max-w-[92%] flex flex-col sm:flex-row items-center gap-2">
+                <span id="toastText"></span>
+                <button id="btnSimCam" class="hidden bg-amber-400 hover:bg-amber-300 text-black font-bold px-2 py-1 rounded text-[7px] sm:text-[8px] whitespace-nowrap cursor-pointer">
+                    SIMULATE POSE
+                </button>
+            </div>
+        </div>
+
+        <!-- Tactile Arcade Dive Controls (Always responsive for touch, mouse & keyboard) -->
+        <footer class="grid grid-cols-3 gap-2 sm:gap-3">
+            <button id="ctrlLeft" class="arcade-btn bg-sky-600 text-white py-3 sm:py-3.5 px-2 rounded-lg flex flex-col items-center justify-center gap-1">
+                <span class="text-xs sm:text-sm">⬅️ DIVE LEFT</span>
+                <span class="text-[7px] text-sky-200">[A / LEFT]</span>
+            </button>
+            <button id="ctrlCenter" class="arcade-btn bg-emerald-600 text-white py-3 sm:py-3.5 px-2 rounded-lg flex flex-col items-center justify-center gap-1">
+                <span class="text-xs sm:text-sm">🧤 HOLD CENTER</span>
+                <span class="text-[7px] text-emerald-200">[S / DOWN]</span>
+            </button>
+            <button id="ctrlRight" class="arcade-btn bg-rose-600 text-white py-3 sm:py-3.5 px-2 rounded-lg flex flex-col items-center justify-center gap-1">
+                <span class="text-xs sm:text-sm">DIVE RIGHT ➡️</span>
+                <span class="text-[7px] text-rose-200">[D / RIGHT]</span>
+            </button>
+        </footer>
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. RETRO 16-BIT SYNTHESIZER AUDIO ENGINE
+        // Zero external MP3/WAV dependencies
+        // ==========================================
+        class RetroSoundEngine {
+            constructor() {
+                this.ctx = null;
+                this.muted = false;
+                this.bgmInterval = null;
+                this.bgmStep = 0;
+            }
+
+            ensureContext() {
+                if (!this.ctx) {
+                    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    if (AudioCtx) {
+                        this.ctx = new AudioCtx();
+                    }
+                }
+                if (this.ctx && this.ctx.state === 'suspended') {
+                    this.ctx.resume().catch(() => {});
+                }
+            }
+
+            toggleMute() {
+                this.muted = !this.muted;
+                if (this.muted) {
+                    this.stopBgm();
+                } else {
+                    this.ensureContext();
+                    this.startBgm();
+                }
+                return this.muted;
+            }
+
+            playTone(freq, duration, type = 'square', volume = 0.08, slideTo = null) {
+                if (this.muted) return;
+                this.ensureContext();
+                if (!this.ctx) return;
+
+                const now = this.ctx.currentTime;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, now);
+                if (slideTo) {
+                    osc.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), now + duration);
+                }
+
+                gain.gain.setValueAtTime(volume, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.start(now);
+                osc.stop(now + duration);
+            }
+
+            playWhistle() {
+                // Referee trill whistle
+                this.playTone(2850, 0.14, 'sine', 0.06, 2950);
+                setTimeout(() => this.playTone(2900, 0.24, 'sine', 0.07, 2750), 150);
+            }
+
+            playKick() {
+                // Punchy bass kick thump
+                this.playTone(150, 0.14, 'triangle', 0.16, 42);
+            }
+
+            playDive() {
+                // Retro whoosh
+                this.playTone(320, 0.12, 'square', 0.04, 140);
+            }
+
+            playSave() {
+                // Glove punch + triumphant arpeggio
+                this.playTone(220, 0.08, 'square', 0.12, 110);
+                setTimeout(() => this.playTone(523.25, 0.09, 'square', 0.09), 70);
+                setTimeout(() => this.playTone(659.25, 0.09, 'square', 0.09), 150);
+                setTimeout(() => this.playTone(783.99, 0.18, 'square', 0.11), 230);
+            }
+
+            playGoalScored() {
+                // Low stadium buzzer
+                this.playTone(130.81, 0.22, 'sawtooth', 0.11, 98);
+                setTimeout(() => this.playTone(98.0, 0.35, 'sawtooth', 0.11, 73.42), 200);
+            }
+
+            startBgm() {
+                if (this.muted || this.bgmInterval) return;
+                const bassNotes = [110, 110, 130.81, 146.83, 164.81, 146.83, 130.81, 98];
+                this.bgmInterval = setInterval(() => {
+                    if (this.muted || !this.ctx || this.ctx.state !== 'running') return;
+                    const note = bassNotes[this.bgmStep % bassNotes.length];
+                    this.playTone(note, 0.14, 'triangle', 0.025);
+                    this.bgmStep++;
+                }, 260);
+            }
+
+            stopBgm() {
+                if (this.bgmInterval) {
+                    clearInterval(this.bgmInterval);
+                    this.bgmInterval = null;
+                }
+            }
+        }
+
+        // ==========================================
+        // 2. TEACHABLE MACHINE POSE CONTROLLER
+        // Loads https://teachablemachine.withgoogle.com/models/MaEtmU1EA/
+        // ==========================================
+        class TeachableMachinePoseController {
+            constructor(modelBaseUrl, onPoseAction, onStatus) {
+                this.modelBaseUrl = modelBaseUrl;
+                this.onPoseAction = onPoseAction;
+                this.onStatus = onStatus;
+
+                this.model = null;
+                this.webcam = null;
+                this.maxPredictions = 0;
+                this.active = false;
+                this.simulated = false;
+                this.rafId = null;
+
+                this.confidenceThreshold = 0.65;
+                this.currentAction = 'center';
+                this.simPointerX = 0.5;
+
+                this.overlayCanvas = document.getElementById('webcamOverlay');
+                this.overlayCtx = this.overlayCanvas.getContext('2d');
+                this.probContainer = document.getElementById('tmProbContainer');
+
+                this.bindHudEvents();
+            }
+
+            bindHudEvents() {
+                document.getElementById('btnConfDown').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.setConfidence(this.confidenceThreshold - 0.05);
+                });
+                document.getElementById('btnConfUp').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.setConfidence(this.confidenceThreshold + 0.05);
+                });
+
+                // Allow cursor/touch drag inside the PiP monitor when in SIMULATE POSE mode
+                const handleSimMove = (e) => {
+                    if (!this.simulated) return;
+                    const rect = this.overlayCanvas.getBoundingClientRect();
+                    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                    this.simPointerX = Math.max(0.05, Math.min(0.95, (clientX - rect.left) / rect.width));
+                };
+                this.overlayCanvas.addEventListener('pointermove', handleSimMove);
+                this.overlayCanvas.addEventListener('pointerdown', handleSimMove);
+            }
+
+            setConfidence(val) {
+                this.confidenceThreshold = Math.max(0.40, Math.min(0.90, Math.round(val * 100) / 100));
+                document.getElementById('uiConfVal').textContent = Math.round(this.confidenceThreshold * 100) + '%';
+            }
+
+            mapClassNameToDirection(className) {
+                const name = (className || '').toLowerCase().trim();
+                if (name.includes('left') || name.includes('ซ้าย')) return 'left';
+                if (name.includes('right') || name.includes('ขวา')) return 'right';
+                return 'center'; // 'normal', 'center', 'middle', 'stand', 'idle', etc.
+            }
+
+            buildProbabilityBars(classLabels) {
+                this.probContainer.innerHTML = '';
+                classLabels.forEach((label, idx) => {
+                    const row = document.createElement('div');
+                    row.className = 'flex flex-col gap-0.5';
+                    row.innerHTML = `
+                        <div class="flex justify-between text-slate-300">
+                            <span class="truncate max-w-[75%]">${label.toUpperCase()}</span>
+                            <span id="tmProbText_${idx}" class="text-amber-300">0%</span>
+                        </div>
+                        <div class="w-full h-1.5 bg-slate-800 rounded-sm overflow-hidden">
+                            <div id="tmProbBar_${idx}" class="h-full bg-emerald-400 transition-all duration-75" style="width: 0%"></div>
+                        </div>
+                    `;
+                    this.probContainer.appendChild(row);
+                });
+            }
+
+            updateProbabilityBars(predictions) {
+                predictions.forEach((pred, idx) => {
+                    const pct = Math.round(pred.probability * 100);
+                    const textEl = document.getElementById(`tmProbText_${idx}`);
+                    const barEl = document.getElementById(`tmProbBar_${idx}`);
+                    if (textEl) textEl.textContent = pct + '%';
+                    if (barEl) {
+                        barEl.style.width = pct + '%';
+                        barEl.className = pred.probability >= this.confidenceThreshold
+                            ? 'h-full bg-amber-400'
+                            : 'h-full bg-sky-500';
+                    }
+                });
+            }
+
+            async start() {
+                try {
+                    if (typeof tmPose === 'undefined') {
+                        throw { name: 'LibraryLoadError', message: 'Teachable Machine Pose SDK still loading.' };
+                    }
+
+                    // Check if embedded iframe policy blocks camera
+                    if (document.permissionsPolicy && typeof document.permissionsPolicy.allowsFeature === 'function') {
+                        if (!document.permissionsPolicy.allowsFeature('camera')) {
+                            throw { name: 'IframePolicyBlocked' };
+                        }
+                    }
+
+                    if (this.onStatus) {
+                        this.onStatus('LOADING POSE MODEL MaEtmU1EA...', false);
+                    }
+
+                    // 1. Load model & metadata directly from Teachable Machine cloud URL
+                    if (!this.model) {
+                        const modelURL = this.modelBaseUrl + 'model.json';
+                        const metadataURL = this.modelBaseUrl + 'metadata.json';
+                        this.model = await tmPose.load(modelURL, metadataURL);
+                        this.maxPredictions = this.model.getTotalClasses();
+                    }
+
+                    const labels = this.model.getClassLabels
+                        ? this.model.getClassLabels()
+                        : Array.from({ length: this.maxPredictions }, (_, i) => `CLASS ${i + 1}`);
+                    this.buildProbabilityBars(labels);
+
+                    // 2. Initialize Teachable Machine Webcam (200x200, flip = true)
+                    const size = 200;
+                    const flip = true;
+                    this.webcam = new tmPose.Webcam(size, size, flip);
+                    await this.webcam.setup();
+                    await this.webcam.play();
+
+                    this.active = true;
+                    this.simulated = false;
+                    document.getElementById('tmBadge').textContent = 'TM POSE LIVE';
+                    document.getElementById('tmBadge').className = 'absolute top-1 left-1 bg-black/80 text-amber-300 text-[6px] sm:text-[7px] px-1 py-0.5 rounded border border-amber-500/50';
+                    document.getElementById('webcamPip').classList.remove('hidden');
+
+                    if (this.onStatus) {
+                        this.onStatus('POSE MODEL READY! LEAN TO DIVE!', false);
+                    }
+
+                    this.loop();
+                    return true;
+                } catch (err) {
+                    this.stop();
+                    const diag = this.diagnoseError(err);
+                    if (this.onStatus) {
+                        this.onStatus(diag, true);
+                    }
+                    return false;
+                }
+            }
+
+            startSimulation() {
+                this.stop();
+                this.active = true;
+                this.simulated = true;
+                this.simPointerX = 0.5;
+                this.buildProbabilityBars(['left', 'normal', 'right']);
+
+                document.getElementById('tmBadge').textContent = 'SIM POSE';
+                document.getElementById('tmBadge').className = 'absolute top-1 left-1 bg-black/80 text-sky-300 text-[6px] sm:text-[7px] px-1 py-0.5 rounded border border-sky-500/50';
+                document.getElementById('webcamPip').classList.remove('hidden');
+                this.loop();
+            }
+
+            diagnoseError(err) {
+                const name = (err && err.name) || '';
+                const msg = ((err && err.message) || '').toLowerCase();
+                const inIframe = window.self !== window.top;
+
+                if (name === 'IframePolicyBlocked' || msg.includes('permissions policy')) {
+                    return 'IFRAME BLOCKED CAM - OPEN NEW TAB OR SIMULATE';
+                }
+                if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+                    return inIframe
+                        ? 'CAMERA BLOCKED IN PREVIEW IFRAME'
+                        : 'ALLOW CAMERA PERMISSION IN BROWSER';
+                }
+                if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+                    return 'NO WEBCAM FOUND ON DEVICE';
+                }
+                if (name === 'NotReadableError' || name === 'TrackStartError') {
+                    return 'WEBCAM BUSY IN ANOTHER APP';
+                }
+                return 'CAM UNAVAILABLE - USE KEYS OR SIMULATE';
+            }
+
+            stop() {
+                this.active = false;
+                this.simulated = false;
+                if (this.rafId) {
+                    cancelAnimationFrame(this.rafId);
+                    this.rafId = null;
+                }
+                if (this.webcam) {
+                    try {
+                        this.webcam.stop();
+                    } catch (_) {}
+                    this.webcam = null;
+                }
+                document.getElementById('webcamPip').classList.add('hidden');
+            }
+
+            async loop() {
+                if (!this.active) return;
+
+                if (this.simulated) {
+                    this.runSimulatedFrame();
+                    this.rafId = requestAnimationFrame(() => this.loop());
+                } else if (this.webcam) {
+                    this.webcam.update();
+                    await this.predictLivePose();
+                    if (this.active) {
+                        this.rafId = requestAnimationFrame(() => this.loop());
+                    }
+                }
+            }
+
+            async predictLivePose() {
+                if (!this.model || !this.webcam || !this.webcam.canvas) return;
+
+                try {
+                    // Run PoseNet + Teachable Machine Classifier
+                    const { pose, posenetOutput } = await this.model.estimatePose(this.webcam.canvas);
+                    const predictions = await this.model.predict(posenetOutput);
+
+                    this.updateProbabilityBars(predictions);
+
+                    // Find highest-confidence class
+                    let bestPred = predictions[0];
+                    for (let i = 1; i < predictions.length; i++) {
+                        if (predictions[i].probability > bestPred.probability) {
+                            bestPred = predictions[i];
+                        }
+                    }
+
+                    if (bestPred && bestPred.probability >= this.confidenceThreshold) {
+                        const mappedDir = this.mapClassNameToDirection(bestPred.className);
+                        this.applyDetectedAction(mappedDir);
+                    }
+
+                    // Draw webcam canvas + PoseNet keypoints & skeleton into retro PiP HUD
+                    this.overlayCtx.drawImage(this.webcam.canvas, 0, 0, 200, 200);
+                    if (pose) {
+                        const minPartConfidence = 0.5;
+                        tmPose.drawKeypoints(pose.keypoints, minPartConfidence, this.overlayCtx);
+                        tmPose.drawSkeleton(pose.keypoints, minPartConfidence, this.overlayCtx);
+                    }
+                } catch (_) {
+                    // Ignore transient frame read hiccups during camera warmup
+                }
+            }
+
+            runSimulatedFrame() {
+                const ctx = this.overlayCtx;
+                ctx.fillStyle = '#0c1322';
+                ctx.fillRect(0, 0, 200, 200);
+
+                // Zone guides
+                ctx.fillStyle = 'rgba(56, 189, 248, 0.15)';
+                ctx.fillRect(0, 0, 68, 200);
+                ctx.fillStyle = 'rgba(244, 63, 94, 0.15)';
+                ctx.fillRect(132, 0, 68, 200);
+
+                // Draw simulated pixel skeleton leaning with pointer
+                const cx = Math.round(this.simPointerX * 200);
+                ctx.strokeStyle = '#38bdf8';
+                ctx.lineWidth = 4;
+                ctx.beginPath();
+                ctx.moveTo(100, 175);
+                ctx.lineTo(cx, 105);
+                ctx.lineTo(cx - 28, 130);
+                ctx.moveTo(cx, 105);
+                ctx.lineTo(cx + 28, 130);
+                ctx.stroke();
+
+                ctx.fillStyle = '#facc15';
+                ctx.beginPath();
+                ctx.arc(cx, 74, 16, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = '#94a3b8';
+                ctx.font = '10px "Press Start 2P", monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('DRAG / HOVER', 100, 192);
+
+                const pLeft = this.simPointerX < 0.35 ? 0.92 : 0.04;
+                const pRight = this.simPointerX > 0.65 ? 0.92 : 0.04;
+                const pCenter = (this.simPointerX >= 0.35 && this.simPointerX <= 0.65) ? 0.92 : 0.04;
+
+                this.updateProbabilityBars([
+                    { className: 'left', probability: pLeft },
+                    { className: 'normal', probability: pCenter },
+                    { className: 'right', probability: pRight }
+                ]);
+
+                const dir = pLeft > 0.65 ? 'left' : pRight > 0.65 ? 'right' : 'center';
+                this.applyDetectedAction(dir);
+            }
+
+            applyDetectedAction(dir) {
+                const statusEl = document.getElementById('poseStatusText');
+                if (dir === 'left') {
+                    statusEl.textContent = '<< LEFT';
+                    statusEl.className = 'text-sky-400 font-bold';
+                } else if (dir === 'right') {
+                    statusEl.textContent = 'RIGHT >>';
+                    statusEl.className = 'text-rose-400 font-bold';
+                } else {
+                    statusEl.textContent = 'CENTER';
+                    statusEl.className = 'text-emerald-400 font-bold';
+                }
+
+                if (dir !== this.currentAction) {
+                    this.currentAction = dir;
+                    if (this.onPoseAction) {
+                        this.onPoseAction(dir);
+                    }
+                }
+            }
+        }
+
+        // ==========================================
+        // 3. 16-BIT PIXEL GOALKEEPER GAME ENGINE
+        // ==========================================
+        class PixelKeeperGame {
+            constructor() {
+                this.canvas = document.getElementById('gameCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.ctx.imageSmoothingEnabled = false;
+
+                this.W = 320;
+                this.H = 200;
+
+                this.sound = new RetroSoundEngine();
+                this.poseController = new TeachableMachinePoseController(
+                    'https://teachablemachine.withgoogle.com/models/MaEtmU1EA/',
+                    (dir) => this.handlePoseDirection(dir),
+                    (msg, showSim) => this.showToast(msg, showSim)
+                );
+
+                // Game modes & persistent high score
+                this.mode = 'ARCADE'; // 'ARCADE' or 'CUP'
+                this.highScore = parseInt(localStorage.getItem('pixelKeeper94_highScore') || '0', 10);
+
+                // Game states: 'TITLE', 'READY', 'RUNUP', 'FLIGHT', 'RESULT', 'GAMEOVER'
+                this.state = 'TITLE';
+                this.stateTimer = 0;
+
+                // Match stats
+                this.score = 0;
+                this.streak = 0;
+                this.bestStreak = 0;
+                this.saves = 0;
+                this.shotsTaken = 0;
+                this.gloves = 3;
+                this.cupHistory = []; // Array of 'SAVE' | 'GOAL'
+
+                // Goalkeeper state ('center', 'left', 'right')
+                this.keeperDir = 'center';
+                this.keeperX = 160;
+                this.keeperTargetX = 160;
+                this.keeperDiveProgress = 0;
+                this.keeperCelebration = null; // 'SAVE' | 'GOAL' | null
+
+                // Striker & Shot state
+                this.strikerX = 160;
+                this.strikerY = 176;
+                this.strikerTellDir = 'center';
+                this.shotTargetDir = 'center';
+                this.shotCurve = 0;
+
+                // Ball 3D-to-2D projection state
+                this.ball = {
+                    x: 160,
+                    y: 166,
+                    z: 0, // 0 at penalty spot -> 1 at goal line
+                    startX: 160,
+                    startY: 166,
+                    targetX: 160,
+                    targetY: 96,
+                    spin: 0,
+                    active: false
+                };
+
+                // Visual effects
+                this.netRipple = 0;
+                this.screenShake = 0;
+                this.bannerText = '';
+                this.bannerColor = '#facc15';
+                this.particles = [];
+                this.stars = Array.from({ length: 24 }, () => ({
+                    x: Math.floor(Math.random() * 320),
+                    y: Math.floor(Math.random() * 44),
+                    phase: Math.random() * Math.PI * 2
+                }));
+
+                this.lastTime = performance.now();
+                this.bindControls();
+                this.updateHud();
+            }
+
+            bindControls() {
+                // Start screen buttons
+                document.getElementById('btnStartKeys').addEventListener('click', () => {
+                    this.sound.ensureContext();
+                    this.sound.startBgm();
+                    document.getElementById('startOverlay').classList.add('hidden');
+                    this.startNewMatch();
+                });
+
+                document.getElementById('btnStartPose').addEventListener('click', async () => {
+                    this.sound.ensureContext();
+                    this.sound.startBgm();
+                    const btn = document.getElementById('btnStartPose');
+                    btn.textContent = '⏳ LOADING MODEL...';
+                    const ok = await this.poseController.start();
+                    btn.textContent = '📷 PLAY WITH POSE CAM';
+                    if (ok) {
+                        const topBtn = document.getElementById('btnWebcam');
+                        topBtn.innerHTML = '<span>📷 POSE: ON</span>';
+                        topBtn.classList.add('active-toggle');
+                        document.getElementById('startOverlay').classList.add('hidden');
+                        this.startNewMatch();
+                    }
+                });
+
+                document.getElementById('btnPlayAgain').addEventListener('click', () => {
+                    document.getElementById('gameOverOverlay').classList.add('hidden');
+                    this.startNewMatch();
+                });
+
+                // Top header mode toggle
+                document.getElementById('btnMode').addEventListener('click', () => {
+                    this.mode = this.mode === 'ARCADE' ? 'CUP' : 'ARCADE';
+                    document.getElementById('btnMode').textContent = `MODE: ${this.mode}`;
+                    if (this.state !== 'TITLE') {
+                        this.startNewMatch();
+                    } else {
+                        this.updateHud();
+                    }
+                });
+
+                // Top header webcam pose toggle
+                document.getElementById('btnWebcam').addEventListener('click', async () => {
+                    const btn = document.getElementById('btnWebcam');
+                    if (this.poseController.active) {
+                        this.poseController.stop();
+                        btn.innerHTML = '<span>📷 POSE: OFF</span>';
+                        btn.classList.remove('active-toggle');
+                        return;
+                    }
+                    btn.innerHTML = '<span>⏳ LOADING...</span>';
+                    const ok = await this.poseController.start();
+                    if (ok) {
+                        btn.innerHTML = '<span>📷 POSE: ON</span>';
+                        btn.classList.add('active-toggle');
+                        if (this.state === 'TITLE') {
+                            document.getElementById('startOverlay').classList.add('hidden');
+                            this.startNewMatch();
+                        }
+                    } else {
+                        btn.innerHTML = '<span>📷 POSE: OFF</span>';
+                        btn.classList.remove('active-toggle');
+                    }
+                });
+
+                // Simulate Pose button in diagnostic toast
+                document.getElementById('btnSimCam').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    document.getElementById('toastBanner').classList.add('hidden');
+                    this.poseController.startSimulation();
+                    const btn = document.getElementById('btnWebcam');
+                    btn.innerHTML = '<span>📷 POSE: SIM</span>';
+                    btn.classList.add('active-toggle');
+                    if (this.state === 'TITLE') {
+                        document.getElementById('startOverlay').classList.add('hidden');
+                        this.startNewMatch();
+                    }
+                    this.showToast('SIM POSE ACTIVE - DRAG IN TOP-RIGHT HUD!', false);
+                });
+
+                // Top header audio toggle
+                document.getElementById('btnAudio').addEventListener('click', () => {
+                    const isMuted = this.sound.toggleMute();
+                    const btn = document.getElementById('btnAudio');
+                    btn.textContent = isMuted ? '🔇 MUTE' : '🔊 SFX';
+                    btn.classList.toggle('text-slate-400', isMuted);
+                    btn.classList.toggle('text-amber-300', !isMuted);
+                });
+
+                // Tactile on-screen arcade buttons
+                const bindDiveButton = (id, dir) => {
+                    const el = document.getElementById(id);
+                    const trigger = (e) => {
+                        e.preventDefault();
+                        this.sound.ensureContext();
+                        this.setKeeperDirection(dir);
+                        this.flashButton(id);
+                    };
+                    el.addEventListener('pointerdown', trigger);
+                };
+                bindDiveButton('ctrlLeft', 'left');
+                bindDiveButton('ctrlCenter', 'center');
+                bindDiveButton('ctrlRight', 'right');
+
+                // Keyboard controls
+                window.addEventListener('keydown', (e) => {
+                    const key = e.key.toLowerCase();
+                    if (key === 'arrowleft' || key === 'a') {
+                        this.setKeeperDirection('left');
+                        this.flashButton('ctrlLeft');
+                    } else if (key === 'arrowright' || key === 'd') {
+                        this.setKeeperDirection('right');
+                        this.flashButton('ctrlRight');
+                    } else if (key === 'arrowdown' || key === 's' || key === ' ') {
+                        this.setKeeperDirection('center');
+                        this.flashButton('ctrlCenter');
+                    }
+                });
+            }
+
+            flashButton(id) {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.classList.add('active-press');
+                setTimeout(() => el.classList.remove('active-press'), 130);
+            }
+
+            showToast(msg, showSimBtn = false) {
+                const toast = document.getElementById('toastBanner');
+                const textEl = document.getElementById('toastText');
+                const simBtn = document.getElementById('btnSimCam');
+                textEl.textContent = msg;
+                simBtn.classList.toggle('hidden', !showSimBtn);
+                toast.classList.remove('hidden');
+
+                clearTimeout(this.toastTimer);
+                this.toastTimer = setTimeout(() => {
+                    toast.classList.add('hidden');
+                }, showSimBtn ? 7000 : 3000);
+            }
+
+            handlePoseDirection(dir) {
+                if (this.state === 'READY' || this.state === 'RUNUP' || this.state === 'FLIGHT') {
+                    this.setKeeperDirection(dir);
+                }
+            }
+
+            setKeeperDirection(dir) {
+                if (this.state === 'RESULT' || this.state === 'GAMEOVER') return;
+                if (this.keeperDir !== dir && dir !== 'center') {
+                    this.sound.playDive();
+                }
+                this.keeperDir = dir;
+                if (dir === 'left') {
+                    this.keeperTargetX = 114;
+                } else if (dir === 'right') {
+                    this.keeperTargetX = 206;
+                } else {
+                    this.keeperTargetX = 160;
+                }
+            }
+
+            startNewMatch() {
+                this.score = 0;
+                this.streak = 0;
+                this.bestStreak = 0;
+                this.saves = 0;
+                this.shotsTaken = 0;
+                this.gloves = 3;
+                this.cupHistory = [];
+                this.updateHud();
+                this.prepareNextPenalty();
+            }
+
+            prepareNextPenalty() {
+                this.state = 'READY';
+                this.stateTimer = 0.85;
+                this.keeperCelebration = null;
+                this.bannerText = '';
+
+                // Reset keeper smoothly to current pose or center
+                if (!this.poseController.active) {
+                    this.setKeeperDirection('center');
+                }
+
+                // Reset striker & ball at penalty spot
+                this.strikerX = 152;
+                this.strikerY = 178;
+                this.ball.x = 160;
+                this.ball.y = 166;
+                this.ball.z = 0;
+                this.ball.active = false;
+
+                // Choose shot destination ('left', 'center', 'right')
+                const dirs = ['left', 'center', 'right'];
+                this.shotTargetDir = dirs[Math.floor(Math.random() * dirs.length)];
+                this.strikerTellDir = this.shotTargetDir;
+
+                // Add curve on higher saves
+                const difficulty = Math.min(1, this.saves / 12);
+                this.shotCurve = (Math.random() < 0.45 + difficulty * 0.35)
+                    ? (Math.random() < 0.5 ? -1 : 1) * (8 + difficulty * 14)
+                    : 0;
+
+                this.sound.playWhistle();
+            }
+
+            launchShot() {
+                this.state = 'FLIGHT';
+                const difficulty = Math.min(1, this.saves / 14);
+                this.flightDuration = Math.max(0.46, 0.78 - difficulty * 0.28);
+                this.stateTimer = this.flightDuration;
+
+                this.ball.startX = 160;
+                this.ball.startY = 166;
+                this.ball.z = 0;
+                this.ball.active = true;
+
+                if (this.shotTargetDir === 'left') {
+                    this.ball.targetX = 112 + (Math.random() * 8 - 4);
+                    this.ball.targetY = 93 + (Math.random() * 10 - 5);
+                } else if (this.shotTargetDir === 'right') {
+                    this.ball.targetX = 208 + (Math.random() * 8 - 4);
+                    this.ball.targetY = 93 + (Math.random() * 10 - 5);
+                } else {
+                    this.ball.targetX = 160 + (Math.random() * 10 - 5);
+                    this.ball.targetY = 95 + (Math.random() * 8 - 4);
+                }
+
+                this.sound.playKick();
+            }
+
+            resolvePenaltyOutcome() {
+                this.shotsTaken++;
+                const isSaved = (this.keeperDir === this.shotTargetDir);
+
+                if (isSaved) {
+                    // SAVE!
+                    this.saves++;
+                    this.streak++;
+                    if (this.streak > this.bestStreak) this.bestStreak = this.streak;
+                    const points = 100 * Math.min(5, this.streak);
+                    this.score += points;
+                    if (this.score > this.highScore) {
+                        this.highScore = this.score;
+                        localStorage.setItem('pixelKeeper94_highScore', String(this.highScore));
+                    }
+
+                    this.keeperCelebration = 'SAVE';
+                    this.bannerText = this.streak >= 3 ? `SUPER SAVE! +${points}` : `GREAT SAVE! +${points}`;
+                    this.bannerColor = '#34d399';
+                    this.cupHistory.push('SAVE');
+                    this.spawnParticles(this.ball.x, this.ball.y, '#34d399', 22);
+                    this.sound.playSave();
+                } else {
+                    // GOAL CONCEDED!
+                    this.streak = 0;
+                    this.keeperCelebration = 'GOAL';
+                    this.bannerText = 'GOAL!!';
+                    this.bannerColor = '#fb7185';
+                    this.netRipple = 1.0;
+                    this.screenShake = 0.25;
+                    this.cupHistory.push('GOAL');
+                    this.spawnParticles(this.ball.x, this.ball.y, '#fb7185', 16);
+                    this.sound.playGoalScored();
+
+                    if (this.mode === 'ARCADE') {
+                        this.gloves = Math.max(0, this.gloves - 1);
+                    }
+                }
+
+                this.updateHud();
+                this.state = 'RESULT';
+                this.stateTimer = 1.25;
+            }
+
+            checkMatchEnd() {
+                if (this.mode === 'ARCADE') {
+                    return this.gloves <= 0;
+                } else {
+                    // CUP SHOOTOUT: 5 kicks, then sudden death if tied
+                    if (this.shotsTaken < 5) return false;
+                    const goalsConceded = this.cupHistory.filter(r => r === 'GOAL').length;
+                    // In Cup mode, player wins if they save at least 3 of 5 (or lead after sudden death rounds)
+                    if (this.shotsTaken === 5) {
+                        return this.saves !== goalsConceded;
+                    }
+                    return this.saves !== goalsConceded;
+                }
+            }
+
+            triggerGameOver() {
+                this.state = 'GAMEOVER';
+                const overlay = document.getElementById('gameOverOverlay');
+                const title = document.getElementById('goTitle');
+                const sub = document.getElementById('goSubtitle');
+
+                if (this.mode === 'CUP') {
+                    const won = this.saves > (this.shotsTaken - this.saves);
+                    title.textContent = won ? 'CUP CHAMPIONS!' : 'KNOCKED OUT!';
+                    title.className = won ? 'text-amber-300 text-sm sm:text-lg' : 'text-rose-400 text-sm sm:text-lg';
+                    sub.textContent = won ? 'TROPHY LIFTED!' : 'BETTER LUCK NEXT CUP!';
+                } else {
+                    title.textContent = 'FULL TIME!';
+                    title.className = 'text-rose-400 text-sm sm:text-lg';
+                    sub.textContent = this.score >= this.highScore && this.score > 0 ? 'NEW HIGH SCORE!' : 'SOLID SHIFT IN GOAL!';
+                }
+
+                document.getElementById('goScore').textContent = String(this.score);
+                document.getElementById('goSaves').textContent = `${this.saves} / ${this.shotsTaken}`;
+                document.getElementById('goStreak').textContent = `${this.bestStreak}x`;
+                overlay.classList.remove('hidden');
+            }
+
+            spawnParticles(x, y, color, count) {
+                for (let i = 0; i < count; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = 25 + Math.random() * 75;
+                    this.particles.push({
+                        x,
+                        y,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed - 20,
+                        life: 0.45 + Math.random() * 0.35,
+                        color
+                    });
+                }
+            }
+
+            updateHud() {
+                document.getElementById('uiScore').textContent = String(this.score).padStart(4, '0');
+                document.getElementById('uiStreak').textContent = `${this.streak}x`;
+                document.getElementById('uiBest').textContent = String(this.highScore).padStart(4, '0');
+
+                if (this.mode === 'ARCADE') {
+                    document.getElementById('uiLivesLabel').textContent = 'GLOVES';
+                    document.getElementById('uiLives').textContent = this.gloves > 0 ? '🧤'.repeat(this.gloves) : '✖';
+                } else {
+                    document.getElementById('uiLivesLabel').textContent = 'SHOOTOUT';
+                    const dots = Array.from({ length: Math.max(5, this.cupHistory.length) }, (_, i) => {
+                        if (this.cupHistory[i] === 'SAVE') return '🟢';
+                        if (this.cupHistory[i] === 'GOAL') return '🔴';
+                        return '⚪';
+                    }).join('');
+                    document.getElementById('uiLives').textContent = dots;
+                }
+            }
+
+            update(dt) {
+                // Smooth goalkeeper horizontal dive interpolation
+                this.keeperX += (this.keeperTargetX - this.keeperX) * Math.min(1, dt * 16);
+                const targetDive = this.keeperDir === 'center' ? 0 : 1;
+                this.keeperDiveProgress += (targetDive - this.keeperDiveProgress) * Math.min(1, dt * 14);
+
+                if (this.netRipple > 0) this.netRipple = Math.max(0, this.netRipple - dt * 2.2);
+                if (this.screenShake > 0) this.screenShake = Math.max(0, this.screenShake - dt);
+
+                // Update particles
+                for (let i = this.particles.length - 1; i >= 0; i--) {
+                    const p = this.particles[i];
+                    p.x += p.vx * dt;
+                    p.y += p.vy * dt;
+                    p.vy += 120 * dt;
+                    p.life -= dt;
+                    if (p.life <= 0) this.particles.splice(i, 1);
+                }
+
+                if (this.state === 'READY') {
+                    this.stateTimer -= dt;
+                    if (this.stateTimer <= 0) {
+                        this.state = 'RUNUP';
+                        this.stateTimer = 0.65;
+                    }
+                } else if (this.state === 'RUNUP') {
+                    this.stateTimer -= dt;
+                    const progress = 1 - Math.max(0, this.stateTimer / 0.65);
+                    this.strikerY = 184 - progress * 14;
+                    // Subtle striker lean telegraph
+                    const leanOffset = this.strikerTellDir === 'left' ? -4 : this.strikerTellDir === 'right' ? 4 : 0;
+                    this.strikerX = 152 + progress * (8 + leanOffset);
+
+                    if (this.stateTimer <= 0) {
+                        this.launchShot();
+                    }
+                } else if (this.state === 'FLIGHT') {
+                    this.stateTimer -= dt;
+                    const t = 1 - Math.max(0, this.stateTimer / this.flightDuration);
+                    this.ball.z = t;
+                    this.ball.spin += dt * 18;
+
+                    // Parabolic arc + lateral swerve
+                    const curveOffset = Math.sin(t * Math.PI) * this.shotCurve;
+                    const arcLift = Math.sin(t * Math.PI) * 14;
+                    this.ball.x = this.ball.startX + (this.ball.targetX - this.ball.startX) * t + curveOffset;
+                    this.ball.y = this.ball.startY + (this.ball.targetY - this.ball.startY) * t - arcLift;
+
+                    if (t >= 1) {
+                        this.resolvePenaltyOutcome();
+                    }
+                } else if (this.state === 'RESULT') {
+                    // Ball deflects on save or settles inside net on goal
+                    if (this.keeperCelebration === 'SAVE') {
+                        this.ball.x += (this.keeperDir === 'left' ? -45 : this.keeperDir === 'right' ? 45 : 0) * dt;
+                        this.ball.y += 38 * dt;
+                        this.ball.spin += dt * 10;
+                    } else {
+                        this.ball.y = Math.min(110, this.ball.y + 18 * dt);
+                    }
+
+                    this.stateTimer -= dt;
+                    if (this.stateTimer <= 0) {
+                        if (this.checkMatchEnd()) {
+                            this.triggerGameOver();
+                        } else {
+                            this.prepareNextPenalty();
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // 16-BIT PIXEL ART RENDERER (320x200)
+            // ==========================================
+            render(now) {
+                const ctx = this.ctx;
+                ctx.save();
+
+                if (this.screenShake > 0) {
+                    const mag = Math.ceil(this.screenShake * 10);
+                    ctx.translate((Math.random() - 0.5) * mag, (Math.random() - 0.5) * mag);
+                }
+
+                // 1. Night Sky & Twinkling Stars
+                ctx.fillStyle = '#0b1021';
+                ctx.fillRect(0, 0, this.W, 66);
+                this.stars.forEach(s => {
+                    const twinkle = Math.sin(now * 0.004 + s.phase) > 0.2;
+                    ctx.fillStyle = twinkle ? '#f8fafc' : '#64748b';
+                    ctx.fillRect(s.x, s.y, 1, 1);
+                });
+
+                // 2. Stadium Floodlights
+                this.drawFloodlight(ctx, 26, 14);
+                this.drawFloodlight(ctx, 274, 14);
+
+                // 3. Stadium Stands & Animated Pixel Crowd
+                ctx.fillStyle = '#1e293b';
+                ctx.fillRect(0, 44, this.W, 24);
+                const crowdColors = ['#ef4444', '#3b82f6', '#facc15', '#10b981', '#f8fafc', '#a855f7'];
+                const jumpPhase = this.keeperCelebration === 'SAVE' ? Math.abs(Math.sin(now * 0.02)) * 3 : 0;
+                for (let row = 0; row < 3; row++) {
+                    for (let col = 0; col < 64; col++) {
+                        const color = crowdColors[(col * 7 + row * 3) % crowdColors.length];
+                        const bob = ((col + row) % 2 === 0 ? jumpPhase : jumpPhase * 0.5);
+                        ctx.fillStyle = color;
+                        ctx.fillRect(col * 5 + 1, 47 + row * 6 - Math.round(bob), 3, 4);
+                    }
+                }
+
+                // Stadium Perimeter Advertising Boards
+                ctx.fillStyle = '#0f172a';
+                ctx.fillRect(0, 66, this.W, 8);
+                const adColors = ['#eab308', '#dc2626', '#2563eb', '#16a34a'];
+                for (let i = 0; i < 8; i++) {
+                    ctx.fillStyle = adColors[i % adColors.length];
+                    ctx.fillRect(i * 40 + 2, 67, 36, 6);
+                }
+
+                // 4. Perspective Pixel Turf Stripes
+                const stripeHeights = [10, 12, 14, 16, 18, 22, 34];
+                let yCursor = 74;
+                stripeHeights.forEach((h, idx) => {
+                    ctx.fillStyle = idx % 2 === 0 ? '#15803d' : '#166534';
+                    ctx.fillRect(0, yCursor, this.W, h);
+                    yCursor += h;
+                });
+
+                // Crisp White Penalty Box & Penalty Spot Markings
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.78)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                // Goal line
+                ctx.moveTo(45, 112);
+                ctx.lineTo(275, 112);
+                // 6-yard box
+                ctx.moveTo(85, 112);
+                ctx.lineTo(72, 134);
+                ctx.lineTo(248, 134);
+                ctx.lineTo(235, 112);
+                // 18-yard penalty box
+                ctx.moveTo(45, 112);
+                ctx.lineTo(14, 182);
+                ctx.lineTo(306, 182);
+                ctx.lineTo(275, 112);
+                ctx.stroke();
+
+                // Penalty spot
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(158, 167, 4, 2);
+
+                // 5. 3D-Perspective Goal Frame & Net
+                this.drawGoal(ctx);
+
+                // 6. Goalkeeper Sprite
+                this.drawGoalkeeper(ctx, now);
+
+                // 7. Ball & Shadow (drawn behind striker during run-up, in front during flight)
+                if (this.state === 'FLIGHT' || this.state === 'RESULT') {
+                    this.drawBall(ctx);
+                    this.drawStriker(ctx, now);
+                } else {
+                    this.drawStriker(ctx, now);
+                    this.drawBall(ctx);
+                }
+
+                // 8. Particles
+                this.particles.forEach(p => {
+                    ctx.fillStyle = p.color;
+                    ctx.fillRect(Math.round(p.x), Math.round(p.y), 3, 3);
+                });
+
+                // 9. Arcade Action Callout Banner
+                if (this.bannerText) {
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+                    ctx.fillRect(68, 22, 184, 22);
+                    ctx.strokeStyle = this.bannerColor;
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(68, 22, 184, 22);
+
+                    ctx.fillStyle = this.bannerColor;
+                    ctx.font = '10px "Press Start 2P", monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(this.bannerText, 160, 37);
+                }
+
+                ctx.restore();
+            }
+
+            drawFloodlight(ctx, x, y) {
+                ctx.fillStyle = '#475569';
+                ctx.fillRect(x + 8, y + 10, 4, 22);
+                ctx.fillStyle = '#1e293b';
+                ctx.fillRect(x, y, 20, 11);
+                ctx.fillStyle = '#fef08a';
+                for (let r = 0; r < 2; r++) {
+                    for (let c = 0; c < 4; c++) {
+                        ctx.fillRect(x + 2 + c * 4, y + 2 + r * 4, 3, 3);
+                    }
+                }
+            }
+
+            drawGoal(ctx) {
+                const rippleX = Math.sin(this.netRipple * Math.PI * 6) * (this.netRipple * 4);
+
+                // Back net mesh
+                ctx.strokeStyle = 'rgba(226, 232, 240, 0.35)';
+                ctx.lineWidth = 1;
+                for (let nx = 104; nx <= 216; nx += 8) {
+                    ctx.beginPath();
+                    ctx.moveTo(nx + rippleX * 0.5, 76);
+                    ctx.lineTo(nx + rippleX, 108);
+                    ctx.stroke();
+                }
+                for (let ny = 78; ny <= 108; ny += 6) {
+                    ctx.beginPath();
+                    ctx.moveTo(102, ny);
+                    ctx.lineTo(218, ny);
+                    ctx.stroke();
+                }
+
+                // Side net depth lines
+                ctx.strokeStyle = 'rgba(203, 213, 225, 0.5)';
+                ctx.beginPath();
+                ctx.moveTo(94, 72);
+                ctx.lineTo(104, 76);
+                ctx.lineTo(104, 108);
+                ctx.lineTo(94, 112);
+                ctx.moveTo(226, 72);
+                ctx.lineTo(216, 76);
+                ctx.lineTo(216, 108);
+                ctx.lineTo(226, 112);
+                ctx.stroke();
+
+                // Main White Posts & Crossbar
+                ctx.fillStyle = '#f8fafc';
+                ctx.fillRect(92, 70, 4, 42);   // Left post
+                ctx.fillRect(224, 70, 4, 42);  // Right post
+                ctx.fillRect(92, 70, 136, 4);  // Crossbar
+            }
+
+            drawGoalkeeper(ctx, now) {
+                const gx = Math.round(this.keeperX);
+                const bounce = this.keeperDir === 'center' ? Math.round(Math.sin(now * 0.012) * 1.5) : 0;
+                const gy = 108 + bounce;
+
+                // Ground shadow
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+                ctx.fillRect(gx - 12, 110, 24, 3);
+
+                if (this.keeperDir === 'left' || this.keeperDir === 'right') {
+                    // Horizontal Diving Goalkeeper Pixel Sprite
+                    const dirSign = this.keeperDir === 'left' ? -1 : 1;
+                    const diveY = gy - 12;
+
+                    // Outstretched Neon Gloves
+                    ctx.fillStyle = '#facc15';
+                    ctx.fillRect(gx + dirSign * 14 - 3, diveY - 3, 6, 5);
+
+                    // Outstretched Arms (Neon Jersey)
+                    ctx.fillStyle = '#38bdf8';
+                    ctx.fillRect(gx + dirSign * 5 - 3, diveY - 2, 10, 4);
+
+                    // Torso (#1)
+                    ctx.fillStyle = '#0284c7';
+                    ctx.fillRect(gx - 6, diveY - 3, 12, 7);
+
+                    // Head
+                    ctx.fillStyle = '#fed7aa';
+                    ctx.fillRect(gx + dirSign * 4 - 2, diveY - 6, 5, 5);
+
+                    // Shorts & Legs
+                    ctx.fillStyle = '#0f172a';
+                    ctx.fillRect(gx - dirSign * 8 - 3, diveY - 2, 7, 5);
+                    ctx.fillStyle = '#38bdf8';
+                    ctx.fillRect(gx - dirSign * 14 - 3, diveY - 1, 7, 3);
+                } else {
+                    // Center Ready Stance Goalkeeper Pixel Sprite
+                    // Legs / Socks
+                    ctx.fillStyle = '#38bdf8';
+                    ctx.fillRect(gx - 5, gy - 8, 3, 8);
+                    ctx.fillRect(gx + 2, gy - 8, 3, 8);
+
+                    // Shorts
+                    ctx.fillStyle = '#0f172a';
+                    ctx.fillRect(gx - 6, gy - 13, 12, 5);
+
+                    // Jersey
+                    ctx.fillStyle = '#0284c7';
+                    ctx.fillRect(gx - 7, gy - 23, 14, 10);
+                    ctx.fillStyle = '#f8fafc';
+                    ctx.fillRect(gx - 1, gy - 20, 2, 5); // Number 1
+
+                    // Raised Ready Arms & Gloves
+                    const armLift = this.keeperCelebration === 'SAVE' ? -5 : 0;
+                    ctx.fillStyle = '#38bdf8';
+                    ctx.fillRect(gx - 11, gy - 22 + armLift, 4, 7);
+                    ctx.fillRect(gx + 7, gy - 22 + armLift, 4, 7);
+
+                    ctx.fillStyle = '#facc15';
+                    ctx.fillRect(gx - 12, gy - 24 + armLift, 5, 4);
+                    ctx.fillRect(gx + 7, gy - 24 + armLift, 5, 4);
+
+                    // Head & Hair
+                    ctx.fillStyle = '#fed7aa';
+                    ctx.fillRect(gx - 3, gy - 29, 6, 6);
+                    ctx.fillStyle = '#451a03';
+                    ctx.fillRect(gx - 3, gy - 30, 6, 2);
+                }
+            }
+
+            drawStriker(ctx, now) {
+                const sx = Math.round(this.strikerX);
+                const sy = Math.round(this.strikerY);
+                const stride = this.state === 'RUNUP' ? Math.round(Math.sin(now * 0.03) * 3) : 0;
+
+                // Shadow
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+                ctx.fillRect(sx - 7, sy - 1, 14, 3);
+
+                // Legs
+                ctx.fillStyle = '#f8fafc';
+                ctx.fillRect(sx - 4, sy - 10 + stride, 3, 10 - stride);
+                ctx.fillRect(sx + 1, sy - 10 - stride, 3, 10 + stride);
+
+                // Red Shorts
+                ctx.fillStyle = '#dc2626';
+                ctx.fillRect(sx - 5, sy - 16, 10, 6);
+
+                // Red Striker Jersey
+                ctx.fillStyle = '#ef4444';
+                ctx.fillRect(sx - 6, sy - 27, 12, 11);
+
+                // Head
+                ctx.fillStyle = '#fed7aa';
+                ctx.fillRect(sx - 3, sy - 33, 6, 6);
+                ctx.fillStyle = '#1e293b';
+                ctx.fillRect(sx - 3, sy - 34, 6, 2);
+            }
+
+            drawBall(ctx) {
+                const bx = Math.round(this.ball.x);
+                const by = Math.round(this.ball.y);
+                // Perspective scaling from 8px at spot to 5px at goal line
+                const size = Math.max(5, Math.round(8 - this.ball.z * 3));
+                const half = Math.floor(size / 2);
+
+                // Shadow on grass
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+                ctx.fillRect(bx - half, by + half + 1, size, 2);
+
+                // White ball base
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(bx - half, by - half, size, size);
+
+                // Rotating black pentagon pixel pattern
+                ctx.fillStyle = '#0f172a';
+                const spinOffset = Math.floor(this.ball.spin) % 2;
+                ctx.fillRect(bx - 1 + spinOffset, by - 1, 2, 2);
+                ctx.fillRect(bx - half, by - half, 1, 1);
+                ctx.fillRect(bx + half - 1, by + half - 1, 1, 1);
+            }
+
+            startLoop() {
+                const tick = (now) => {
+                    const dt = Math.min(0.05, (now - this.lastTime) / 1000);
+                    this.lastTime = now;
+                    this.update(dt);
+                    this.render(now);
+                    requestAnimationFrame(tick);
+                };
+                requestAnimationFrame(tick);
+            }
+        }
+
+        window.onload = function () {
+            const game = new PixelKeeperGame();
+            game.startLoop();
+        };
+    </script>
+</body>
+</html>
